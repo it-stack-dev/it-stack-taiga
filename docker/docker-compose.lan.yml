@@ -1,0 +1,36 @@
+# Lab 02 — External Dependencies: taiga with external PostgreSQL and Redis
+---
+services:
+  taiga:
+    image: taigaio/taiga-front:latest
+    container_name: it-stack-taiga
+    restart: unless-stopped
+    ports:
+      - "80:$firstPort"
+    environment:
+      - IT_STACK_ENV=lab-02-lan
+      - DB_HOST=
+      - DB_PORT=5432
+      - REDIS_HOST=
+    networks:
+      - it-stack-net
+
+  # Lightweight local DB for lab (replace with lab-db1 in real env)
+  postgres:
+    image: postgres:16
+    container_name: it-stack-taiga-db
+    environment:
+      POSTGRES_DB: taiga_db
+      POSTGRES_USER: taiga_user
+      POSTGRES_PASSWORD: taiga_pass
+    volumes:
+      - taiga_pg_data:/var/lib/postgresql/data
+    networks:
+      - it-stack-net
+
+networks:
+  it-stack-net:
+    driver: bridge
+
+volumes:
+  taiga_pg_data:

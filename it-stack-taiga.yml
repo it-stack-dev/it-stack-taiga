@@ -1,0 +1,57 @@
+# it-stack-taiga.yml — IT-Stack Module Manifest
+# Module 15: Taiga agile project management
+
+module:
+  name: taiga
+  number: "15"
+  repo: it-stack-dev/it-stack-taiga
+  version: "0.1.0"
+  phase: 4
+  category: it-management
+  server: lab-mgmt1
+  description: "Taiga agile project management"
+
+upstream:
+  name: Taiga
+  image: taigaio/taiga-front:latest
+  license: AGPL-3.0
+
+ports:
+  - 80 (HTTP)
+   - 443 (HTTPS)
+
+labs:
+  - id: "15-01"
+    name: Standalone
+    docker_compose: docker/docker-compose.standalone.yml
+    test_script: tests/labs/test-lab-15-01.sh
+  - id: "15-02"
+    name: External Dependencies
+    docker_compose: docker/docker-compose.lan.yml
+    test_script: tests/labs/test-lab-15-02.sh
+  - id: "15-03"
+    name: Advanced Features
+    docker_compose: docker/docker-compose.advanced.yml
+    test_script: tests/labs/test-lab-15-03.sh
+  - id: "15-04"
+    name: SSO Integration
+    docker_compose: docker/docker-compose.sso.yml
+    test_script: tests/labs/test-lab-15-04.sh
+  - id: "15-05"
+    name: Advanced Integration
+    docker_compose: docker/docker-compose.integration.yml
+    test_script: tests/labs/test-lab-15-05.sh
+  - id: "15-06"
+    name: Production Deployment
+    docker_compose: docker/docker-compose.production.yml
+    test_script: tests/labs/test-lab-15-06.sh
+
+resources:
+  cpu_cores: 2
+  ram_gb: 4
+  disk_gb: 20
+
+health_check:
+  endpoint: /health
+  metrics_endpoint: /metrics
+  log_path: /var/log/taiga/
