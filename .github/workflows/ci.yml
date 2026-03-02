@@ -233,3 +233,43 @@ run: bash tests/labs/test-lab-15-01.sh
       - name: Cleanup
         if: always()
         run: docker compose -f docker/docker-compose.sso.yml down -v
+
+  lab-05-smoke:
+    name: Lab 15-05 -- Taiga Advanced Integration (Mattermost Webhook)
+    runs-on: ubuntu-latest
+    needs: validate
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get install -y curl postgresql-client netcat-openbsd ldap-utils
+
+      - name: Validate integration compose
+        run: docker compose -f docker/docker-compose.integration.yml config -q && echo "Integration compose valid"
+
+      - name: Start integration stack
+        run: docker compose -f docker/docker-compose.integration.yml up -d
+
+      - name: Wait for WireMock
+        run: timeout 90 bash -c 'until curl -sf http://localhost:8761/__admin/health; do sleep 5; done'
+
+      - name: Wait for PostgreSQL
+        run: timeout 120 bash -c 'until docker exec taiga-i05-db pg_isready -U taiga > /dev/null 2>&1; do sleep 5; done'
+
+      - name: Wait for Keycloak
+        run: timeout 300 bash -c 'until curl -sf http://localhost:8540/realms/master; do sleep 10; done'
+
+      - name: Wait for Taiga Back
+        run: timeout 300 bash -c 'until curl -sf http://localhost:8041/api/v1/ | grep -q version; do sleep 15; done'
+
+      - name: Run Lab 15-05 test script
+        run: bash tests/labs/test-lab-15-05.sh --no-cleanup
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.integration.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker/docker-compose.integration.yml down -v
