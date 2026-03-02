@@ -26,38 +26,82 @@ echo -e "${CYAN} Module: ${MODULE}${NC}"
 echo -e "${CYAN}======================================${NC}"
 echo ""
 
+TAIGA_API="http://localhost:8001"
+TAIGA_UI="http://localhost:8400"
+NO_CLEANUP=${NO_CLEANUP:-0}
+
+cleanup() {
+    if [ "${NO_CLEANUP}" = "1" ]; then
+        info "NO_CLEANUP=1 — skipping teardown"
+    else
+        info "Phase 4: Cleanup"
+        docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
+        info "Cleanup complete"
+    fi
+}
+trap cleanup EXIT
+
+section() { echo -e "\n${CYAN}## $1${NC}"; }
+
 # ── PHASE 1: Setup ────────────────────────────────────────────────────────────
-info "Phase 1: Setup"
+section "Phase 1: Setup"
 docker compose -f "${COMPOSE_FILE}" up -d
-info "Waiting 30s for ${MODULE} to initialize..."
-sleep 30
+info "Waiting 120s for Taiga to initialize (PostgreSQL + Redis + Django)..."
+sleep 120
 
 # ── PHASE 2: Health Checks ────────────────────────────────────────────────────
-info "Phase 2: Health Checks"
+section "Phase 2: Health Checks"
 
-if docker compose -f "${COMPOSE_FILE}" ps | grep -q "running\|Up"; then
-    pass "Container is running"
+RUNNING=$(docker compose -f "${COMPOSE_FILE}" ps --format json 2>/dev/null | grep -c '"State":"running"' || \
+    docker compose -f "${COMPOSE_FILE}" ps | grep -c 'Up' || echo 0)
+if [ "${RUNNING}" -ge 4 ]; then
+    pass "2.1 All 4 core containers running (db, redis, back, front)"
 else
-    fail "Container is not running"
+    fail "2.1 Expected 4 containers running, got ${RUNNING}"
+fi
+
+if docker compose -f "${COMPOSE_FILE}" ps taiga-s01-db 2>/dev/null | grep -q 'Up\|running'; then
+    pass "2.2 PostgreSQL (taiga-s01-db) is up"
+else
+    fail "2.2 PostgreSQL is not running"
+fi
+
+if docker compose -f "${COMPOSE_FILE}" ps taiga-s01-back 2>/dev/null | grep -q 'Up\|running'; then
+    pass "2.3 Taiga backend (taiga-s01-back) is up"
+else
+    fail "2.3 Taiga backend is not running"
 fi
 
 # ── PHASE 3: Functional Tests ─────────────────────────────────────────────────
-info "Phase 3: Functional Tests (Lab 01 — Standalone)"
+section "Phase 3: Functional Tests"
 
-# TODO: Add module-specific functional tests here
-# Example:
-# if curl -sf http://localhost:80/health > /dev/null 2>&1; then
-#     pass "Health endpoint responds"
-# else
-#     fail "Health endpoint not reachable"
-# fi
+# 3.1 Backend API root
+if curl -sf "${TAIGA_API}/api/v1/" 2>/dev/null | grep -q 'projects\|auth\|users\|404'; then
+    pass "3.1 Taiga backend API root responds"
+elif curl -o /dev/null -sw '%{http_code}' "${TAIGA_API}/api/v1/" 2>/dev/null | grep -q '200\|302\|404'; then
+    pass "3.1 Taiga backend API root responds (HTTP 200/302/404)"
+else
+    fail "3.1 Taiga backend API not reachable at ${TAIGA_API}/api/v1/"
+fi
 
-warn "Functional tests for Lab 15-01 pending implementation"
+# 3.2 Frontend UI loads
+HTTP_CODE=$(curl -o /dev/null -sw '%{http_code}' "${TAIGA_UI}/" 2>/dev/null || echo 000)
+if echo "${HTTP_CODE}" | grep -q '^[23]'; then
+    pass "3.2 Taiga frontend UI accessible (HTTP ${HTTP_CODE})"
+else
+    fail "3.2 Taiga frontend UI not accessible (HTTP ${HTTP_CODE})"
+fi
 
-# ── PHASE 4: Cleanup ──────────────────────────────────────────────────────────
-info "Phase 4: Cleanup"
-docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans
-info "Cleanup complete"
+# 3.3 API auth endpoint
+HTTP_AUTH=$(curl -o /dev/null -sw '%{http_code}' -X POST "${TAIGA_API}/api/v1/auth" \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"normal","username":"invalid","password":"invalid"}' \
+    2>/dev/null || echo 000)
+if echo "${HTTP_AUTH}" | grep -q '^[24]'; then
+    pass "3.3 Taiga auth endpoint reachable (HTTP ${HTTP_AUTH})"
+else
+    fail "3.3 Taiga auth endpoint not reachable (HTTP ${HTTP_AUTH})"
+fi
 
 # ── Results ───────────────────────────────────────────────────────────────────
 echo ""

@@ -1,29 +1,100 @@
-# Lab 01 — Standalone: Complete Taiga agile project management in isolation
-# No external dependencies required.
+# Lab 01 — Standalone: Taiga agile project management in isolation
+# Includes: PostgreSQL, Redis, taiga-back (API), taiga-front (UI).
+# Access UI at http://localhost:8400 | API at http://localhost:8001
 ---
+name: it-stack-taiga-lab01
+
 services:
-  taiga:
-    image: taigaio/taiga-front:latest
-    container_name: it-stack-taiga
+
+  taiga-s01-db:
+    image: postgres:15-alpine
+    container_name: taiga-s01-db
     restart: unless-stopped
-    ports:
-      - "80:$firstPort"
     environment:
-      - IT_STACK_ENV=lab-01-standalone
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: taiga_lab_password
     volumes:
-      - taiga_data:/var/lib/taiga
+      - taiga-s01-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U taiga -d taiga"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    networks:
+      - taiga-s01-net
+
+  taiga-s01-redis:
+    image: redis:7-alpine
+    container_name: taiga-s01-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taiga-s01-net
+
+  taiga-s01-back:
+    image: taigaio/taiga-back:latest
+    container_name: taiga-s01-back
+    restart: unless-stopped
+    depends_on:
+      taiga-s01-db:
+        condition: service_healthy
+      taiga-s01-redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: taiga-s01-db
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: taiga_lab_password
+      TAIGA_SECRET_KEY: "lab01-insecure-secret-key-for-testing-only-change-in-prod"
+      TAIGA_SITES_DOMAIN: "localhost:8001"
+      TAIGA_SITES_SCHEME: "http"
+      TAIGA_REDIS_URL: "redis://taiga-s01-redis:6379/0"
+      SESSION_COOKIE_SECURE: "False"
+      CSRF_COOKIE_SECURE: "False"
+      ENABLE_TELEMETRY: "False"
+    ports:
+      - "8001:8000"
+    volumes:
+      - taiga-s01-static:/taiga-back/static
+      - taiga-s01-media:/taiga-back/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -q 'projects\|auth' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 90s
+    networks:
+      - taiga-s01-net
+
+  taiga-s01-front:
+    image: taigaio/taiga-front:latest
+    container_name: taiga-s01-front
+    restart: unless-stopped
+    environment:
+      TAIGA_URL: "http://localhost:8001"
+      TAIGA_WEBSOCKETS_URL: "ws://localhost:8001"
+    ports:
+      - "8400:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/ | grep -qi 'taiga\|doctype' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
     networks:
-      - it-stack-net
+      - taiga-s01-net
 
 networks:
-  it-stack-net:
+  taiga-s01-net:
     driver: bridge
 
 volumes:
-  taiga_data:
+  taiga-s01-db-data:
+  taiga-s01-static:
+  taiga-s01-media:
