@@ -1,36 +1,127 @@
-# Lab 02 — External Dependencies: taiga with external PostgreSQL and Redis
+# Lab 02 — External Dependencies: Taiga with external PostgreSQL, Redis, and Mailhog
+# Models the LAN tier: DB/cache on data-net, app on app-net.
+# Taiga UI:  http://localhost:8410
+# Taiga API: http://localhost:8011
+# Mailhog:   http://localhost:8710
 ---
+name: it-stack-taiga-lab02
+
 services:
-  taiga:
-    image: taigaio/taiga-front:latest
-    container_name: it-stack-taiga
+
+  # ── External Database (simulates lab-db1) ─────────────────────────────────
+  taiga-l02-db:
+    image: postgres:15-alpine
+    container_name: taiga-l02-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: TaigaLab02!
+    volumes:
+      - taiga-l02-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taiga -d taiga"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    networks:
+      - taiga-l02-data-net
+
+  # ── External Redis (simulates shared cache tier) ───────────────────────────
+  taiga-l02-redis:
+    image: redis:7-alpine
+    container_name: taiga-l02-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taiga-l02-data-net
+
+  # ── External SMTP relay (Mailhog) ─────────────────────────────────────────
+  taiga-l02-mail:
+    image: mailhog/mailhog:latest
+    container_name: taiga-l02-mail
     restart: unless-stopped
     ports:
-      - "80:$firstPort"
-    environment:
-      - IT_STACK_ENV=lab-02-lan
-      - DB_HOST=
-      - DB_PORT=5432
-      - REDIS_HOST=
+      - "8710:8025"
     networks:
-      - it-stack-net
+      - taiga-l02-app-net
 
-  # Lightweight local DB for lab (replace with lab-db1 in real env)
-  postgres:
-    image: postgres:16
-    container_name: it-stack-taiga-db
+  # ── Taiga Backend (Django API) ────────────────────────────────────────────
+  taiga-l02-back:
+    image: taigaio/taiga-back:latest
+    container_name: taiga-l02-back
+    restart: unless-stopped
+    depends_on:
+      taiga-l02-db:
+        condition: service_healthy
+      taiga-l02-redis:
+        condition: service_healthy
+      taiga-l02-mail:
+        condition: service_started
     environment:
-      POSTGRES_DB: taiga_db
-      POSTGRES_USER: taiga_user
-      POSTGRES_PASSWORD: taiga_pass
+      POSTGRES_HOST: taiga-l02-db
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: TaigaLab02!
+      TAIGA_SECRET_KEY: "lab02-lan-secret-key-for-testing-only-change-in-prod"
+      TAIGA_SITES_DOMAIN: "localhost:8011"
+      TAIGA_SITES_SCHEME: "http"
+      TAIGA_REDIS_URL: "redis://taiga-l02-redis:6379/0"
+      DEFAULT_FROM_EMAIL: "taiga@lab02.local"
+      EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+      EMAIL_USE_TLS: "False"
+      EMAIL_USE_SSL: "False"
+      EMAIL_HOST: taiga-l02-mail
+      EMAIL_PORT: "1025"
+      SESSION_COOKIE_SECURE: "False"
+      CSRF_COOKIE_SECURE: "False"
+      ENABLE_TELEMETRY: "False"
+    ports:
+      - "8011:8000"
     volumes:
-      - taiga_pg_data:/var/lib/postgresql/data
+      - taiga-l02-static:/taiga-back/static
+      - taiga-l02-media:/taiga-back/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -q 'projects\\|auth\\|404' || curl -o /dev/null -sw '%{http_code}' http://localhost:8000/api/v1/ | grep -q '^[234]'"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 90s
     networks:
-      - it-stack-net
+      - taiga-l02-data-net
+      - taiga-l02-app-net
+
+  # ── Taiga Frontend (Nginx) ────────────────────────────────────────────────
+  taiga-l02-front:
+    image: taigaio/taiga-front:latest
+    container_name: taiga-l02-front
+    restart: unless-stopped
+    environment:
+      TAIGA_URL: "http://localhost:8011"
+      TAIGA_WEBSOCKETS_URL: "ws://localhost:8011"
+    ports:
+      - "8410:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/ | grep -qi 'taiga\\|doctype' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - taiga-l02-app-net
 
 networks:
-  it-stack-net:
+  taiga-l02-data-net:
+    driver: bridge
+  taiga-l02-app-net:
     driver: bridge
 
 volumes:
-  taiga_pg_data:
+  taiga-l02-db-data:
+  taiga-l02-static:
+  taiga-l02-media:

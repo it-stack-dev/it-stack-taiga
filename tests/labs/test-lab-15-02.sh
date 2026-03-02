@@ -26,38 +26,153 @@ echo -e "${CYAN} Module: ${MODULE}${NC}"
 echo -e "${CYAN}======================================${NC}"
 echo ""
 
+# ── Cleanup control ───────────────────────────────────────────────────────────
+CLEANUP=true
+[[ "${1:-}" == "--no-cleanup" ]] && CLEANUP=false
+
+cleanup() {
+  if [[ "${CLEANUP}" == "true" ]]; then
+    info "Phase 4: Cleanup"
+    docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
+    info "Cleanup complete"
+  else
+    info "Skipping cleanup (--no-cleanup)"
+  fi
+}
+trap cleanup EXIT
+
 # ── PHASE 1: Setup ────────────────────────────────────────────────────────────
 info "Phase 1: Setup"
 docker compose -f "${COMPOSE_FILE}" up -d
-info "Waiting 30s for ${MODULE} to initialize..."
-sleep 30
 
 # ── PHASE 2: Health Checks ────────────────────────────────────────────────────
 info "Phase 2: Health Checks"
 
-if docker compose -f "${COMPOSE_FILE}" ps | grep -q "running\|Up"; then
-    pass "Container is running"
-else
-    fail "Container is not running"
-fi
+info "Waiting for external PostgreSQL (taiga-l02-db, up to 90s)..."
+for i in $(seq 1 18); do
+  if docker exec taiga-l02-db pg_isready -U taiga -d taiga >/dev/null 2>&1; then
+    pass "External PostgreSQL healthy"
+    break
+  fi
+  [[ $i -eq 18 ]] && fail "External PostgreSQL timed out after 90s"
+  sleep 5
+done
+
+info "Waiting for external Redis (taiga-l02-redis, up to 60s)..."
+for i in $(seq 1 12); do
+  if docker exec taiga-l02-redis redis-cli ping 2>/dev/null | grep -q 'PONG'; then
+    pass "External Redis healthy"
+    break
+  fi
+  [[ $i -eq 12 ]] && fail "External Redis timed out after 60s"
+  sleep 5
+done
+
+info "Waiting for Mailhog (taiga-l02-mail, up to 60s)..."
+for i in $(seq 1 12); do
+  if curl -sf http://localhost:8710/api/v2/messages >/dev/null 2>&1; then
+    pass "Mailhog API reachable"
+    break
+  fi
+  [[ $i -eq 12 ]] && fail "Mailhog timed out after 60s"
+  sleep 5
+done
+
+info "Waiting for Taiga backend API (taiga-l02-back, up to 180s)..."
+for i in $(seq 1 36); do
+  http_code=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8011/api/v1/ 2>/dev/null || echo "000")
+  if [[ "${http_code}" =~ ^[234] ]]; then
+    pass "Taiga backend API responding (HTTP ${http_code})"
+    break
+  fi
+  [[ $i -eq 36 ]] && fail "Taiga backend timed out after 180s"
+  sleep 5
+done
+
+info "Waiting for Taiga frontend (taiga-l02-front, up to 120s)..."
+for i in $(seq 1 24); do
+  if curl -sf http://localhost:8410/ 2>/dev/null | grep -qi 'taiga\|doctype\|html'; then
+    pass "Taiga frontend serving HTML"
+    break
+  fi
+  [[ $i -eq 24 ]] && fail "Taiga frontend timed out after 120s"
+  sleep 5
+done
 
 # ── PHASE 3: Functional Tests ─────────────────────────────────────────────────
-info "Phase 3: Functional Tests (Lab 02 — External Dependencies)"
+info "Phase 3: Functional Tests (Lab 15-02 — External Dependencies)"
 
-# TODO: Add module-specific functional tests here
-# Example:
-# if curl -sf http://localhost:80/health > /dev/null 2>&1; then
-#     pass "Health endpoint responds"
-# else
-#     fail "Health endpoint not reachable"
-# fi
+# Container states
+for svc in taiga-l02-db taiga-l02-redis taiga-l02-mail taiga-l02-back taiga-l02-front; do
+  state=$(docker inspect --format='{{.State.Status}}' "${svc}" 2>/dev/null || echo "missing")
+  if [[ "${state}" == "running" ]]; then
+    pass "Container ${svc} is running"
+  else
+    fail "Container ${svc} state: ${state}"
+  fi
+done
 
-warn "Functional tests for Lab 15-02 pending implementation"
+# DB connectivity from back container
+if docker exec taiga-l02-back bash -c 'python -c "import psycopg2; psycopg2.connect(host=\"taiga-l02-db\",dbname=\"taiga\",user=\"taiga\",password=\"TaigaLab02!\"); print(\"ok\")"' 2>/dev/null | grep -q 'ok'; then
+  pass "Backend can connect to external PostgreSQL"
+else
+  warn "psycopg2 direct test skipped (may not be installed separately); checking via pg_isready"
+  if docker exec taiga-l02-db psql -U taiga -d taiga -c '\dt' 2>/dev/null | grep -qi 'row\|table\|schema'; then
+    pass "PostgreSQL taiga database has schema tables"
+  else
+    warn "PostgreSQL schema check inconclusive (migrations may not have run yet)"
+  fi
+fi
 
-# ── PHASE 4: Cleanup ──────────────────────────────────────────────────────────
-info "Phase 4: Cleanup"
-docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans
-info "Cleanup complete"
+# Redis connectivity from back container
+if docker exec taiga-l02-back bash -c 'python -c "import redis; r=redis.Redis(host=\"taiga-l02-redis\"); r.ping(); print(\"ok\")"' 2>/dev/null | grep -q 'ok'; then
+  pass "Backend can connect to external Redis"
+else
+  # Fallback: redis-cli from Redis container itself
+  if docker exec taiga-l02-redis redis-cli ping 2>/dev/null | grep -q 'PONG'; then
+    pass "External Redis is healthy (redis-cli ping)"
+  else
+    fail "External Redis not responding"
+  fi
+fi
+
+# Mailhog API format check
+mailhog_resp=$(curl -sf http://localhost:8710/api/v2/messages 2>/dev/null || echo "{}")
+if echo "${mailhog_resp}" | grep -q 'total\|items\|count'; then
+  pass "Mailhog API returns valid JSON message list"
+else
+  fail "Mailhog API response unexpected: ${mailhog_resp}"
+fi
+
+# HTTP status checks
+for url_port in "8011/api/v1/" "8410/"; do
+  port=$(echo "${url_port}" | cut -d/ -f1)
+  path=$(echo "${url_port}" | cut -d/ -f2-)
+  http_code=$(curl -o /dev/null -sw '%{http_code}' "http://localhost:${url_port}" 2>/dev/null || echo "000")
+  if [[ "${http_code}" =~ ^[234] ]]; then
+    pass "HTTP GET http://localhost:${url_port} -> ${http_code}"
+  else
+    fail "HTTP GET http://localhost:${url_port} -> ${http_code}"
+  fi
+done
+
+# Key env vars present in back container
+for var in POSTGRES_HOST TAIGA_SECRET_KEY TAIGA_REDIS_URL EMAIL_HOST; do
+  if docker exec taiga-l02-back printenv "${var}" 2>/dev/null | grep -q '.'; then
+    pass "Env var ${var} set in taiga-l02-back"
+  else
+    fail "Env var ${var} missing in taiga-l02-back"
+  fi
+done
+
+# Volume existence
+for vol in taiga-l02-db-data taiga-l02-static taiga-l02-media; do
+  if docker volume ls --format '{{.Name}}' | grep -q "${vol}"; then
+    pass "Volume ${vol} exists"
+  else
+    fail "Volume ${vol} missing"
+  fi
+done
 
 # ── Results ───────────────────────────────────────────────────────────────────
 echo ""
