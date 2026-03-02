@@ -1,34 +1,187 @@
-# Lab 03 — Advanced Features: taiga with TLS, resource limits, logging
+# Lab 03 — Advanced Features: Taiga with async events worker + Redis persistence
+# Resource limits on all containers · taiga-async events worker added
+# Taiga UI:  http://localhost:8420
+# Taiga API: http://localhost:8021
+# Mailhog:   http://localhost:8720
 ---
+name: it-stack-taiga-lab03
+
 services:
-  taiga:
-    image: taigaio/taiga-front:latest
-    container_name: it-stack-taiga
+
+  # ── External Database ───────────────────────────────────────────────────
+  taiga-a03-db:
+    image: postgres:15-alpine
+    container_name: taiga-a03-db
     restart: unless-stopped
-    ports:
-      - "80:$firstPort"
     environment:
-      - IT_STACK_ENV=lab-03-advanced
-      - TLS_ENABLED=true
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: TaigaLab03!
     volumes:
-      - taiga_data:/var/lib/taiga
-      - ./certs:/etc/ssl/certs:ro
+      - taiga-a03-db-data:/var/lib/postgresql/data
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: G
+          cpus: "0.5"
+          memory: 512M
     logging:
       driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
+      options: {max-size: "50m", max-file: "3"}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taiga -d taiga"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
     networks:
-      - it-stack-net
+      - taiga-a03-net
+
+  # ── Redis (persistence + maxmemory policy) ────────────────────────────
+  taiga-a03-redis:
+    image: redis:7-alpine
+    container_name: taiga-a03-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - taiga-a03-redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - taiga-a03-net
+
+  # ── SMTP relay (Mailhog) ─────────────────────────────────────────────
+  taiga-a03-mail:
+    image: mailhog/mailhog:latest
+    container_name: taiga-a03-mail
+    restart: unless-stopped
+    ports:
+      - "8720:8025"
+    networks:
+      - taiga-a03-net
+
+  # ── Taiga Backend (Django API) ──────────────────────────────────────
+  taiga-a03-back:
+    image: taigaio/taiga-back:latest
+    container_name: taiga-a03-back
+    restart: unless-stopped
+    depends_on:
+      taiga-a03-db: {condition: service_healthy}
+      taiga-a03-redis: {condition: service_healthy}
+      taiga-a03-mail: {condition: service_started}
+    environment:
+      POSTGRES_HOST: taiga-a03-db
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: TaigaLab03!
+      TAIGA_SECRET_KEY: "lab03-advanced-secret-key-for-testing-only"
+      TAIGA_SITES_DOMAIN: "localhost:8021"
+      TAIGA_SITES_SCHEME: "http"
+      TAIGA_REDIS_URL: "redis://taiga-a03-redis:6379/0"
+      TAIGA_CELERY_BROKER_URL: "redis://taiga-a03-redis:6379/1"
+      DEFAULT_FROM_EMAIL: "taiga@lab03.local"
+      EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+      EMAIL_USE_TLS: "False"
+      EMAIL_HOST: taiga-a03-mail
+      EMAIL_PORT: "1025"
+      SESSION_COOKIE_SECURE: "False"
+      CSRF_COOKIE_SECURE: "False"
+      ENABLE_TELEMETRY: "False"
+    ports:
+      - "8021:8000"
+    volumes:
+      - taiga-a03-static:/taiga-back/static
+      - taiga-a03-media:/taiga-back/media
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: json-file
+      options: {max-size: "100m", max-file: "5"}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -o /dev/null -sw '%{http_code}' http://localhost:8000/api/v1/ | grep -q '^[234]'"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 90s
+    networks:
+      - taiga-a03-net
+
+  # ── Taiga Async Events Worker (new in Lab 03) ────────────────────────
+  taiga-a03-async:
+    image: taigaio/taiga-async:latest
+    container_name: taiga-a03-async
+    restart: unless-stopped
+    depends_on:
+      taiga-a03-back: {condition: service_healthy}
+    environment:
+      POSTGRES_HOST: taiga-a03-db
+      POSTGRES_DB: taiga
+      POSTGRES_USER: taiga
+      POSTGRES_PASSWORD: TaigaLab03!
+      TAIGA_SECRET_KEY: "lab03-advanced-secret-key-for-testing-only"
+      TAIGA_REDIS_URL: "redis://taiga-a03-redis:6379/0"
+      TAIGA_CELERY_BROKER_URL: "redis://taiga-a03-redis:6379/1"
+      ENABLE_TELEMETRY: "False"
+    volumes:
+      - taiga-a03-static:/taiga-back/static
+      - taiga-a03-media:/taiga-back/media
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "3"}
+    networks:
+      - taiga-a03-net
+
+  # ── Taiga Frontend (Nginx) ──────────────────────────────────────────
+  taiga-a03-front:
+    image: taigaio/taiga-front:latest
+    container_name: taiga-a03-front
+    restart: unless-stopped
+    environment:
+      TAIGA_URL: "http://localhost:8021"
+      TAIGA_WEBSOCKETS_URL: "ws://localhost:8021"
+    ports:
+      - "8420:80"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/ | grep -qi 'taiga\\|doctype\\|html' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - taiga-a03-net
 
 networks:
-  it-stack-net:
+  taiga-a03-net:
     driver: bridge
 
 volumes:
-  taiga_data:
+  taiga-a03-db-data:
+  taiga-a03-redis-data:
+  taiga-a03-static:
+  taiga-a03-media:
