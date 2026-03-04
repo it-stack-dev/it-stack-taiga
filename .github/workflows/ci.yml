@@ -235,7 +235,7 @@ run: bash tests/labs/test-lab-15-01.sh
         run: docker compose -f docker/docker-compose.sso.yml down -v
 
   lab-05-smoke:
-    name: Lab 15-05 -- Taiga Advanced Integration (Mattermost Webhook)
+    name: Lab 15-05 -- Taiga Advanced Integration (INT-08 Taiga<->Keycloak OIDC + LDAP)
     runs-on: ubuntu-latest
     needs: validate
     continue-on-error: true
@@ -243,7 +243,7 @@ run: bash tests/labs/test-lab-15-01.sh
       - uses: actions/checkout@v4
 
       - name: Install tools
-        run: sudo apt-get install -y curl postgresql-client netcat-openbsd ldap-utils
+        run: sudo apt-get install -y curl postgresql-client netcat-openbsd ldap-utils python3
 
       - name: Validate integration compose
         run: docker compose -f docker/docker-compose.integration.yml config -q && echo "Integration compose valid"
@@ -251,17 +251,23 @@ run: bash tests/labs/test-lab-15-01.sh
       - name: Start integration stack
         run: docker compose -f docker/docker-compose.integration.yml up -d
 
-      - name: Wait for WireMock
-        run: timeout 90 bash -c 'until curl -sf http://localhost:8761/__admin/health; do sleep 5; done'
-
       - name: Wait for PostgreSQL
         run: timeout 120 bash -c 'until docker exec taiga-i05-db pg_isready -U taiga > /dev/null 2>&1; do sleep 5; done'
 
+      - name: Wait for OpenLDAP
+        run: timeout 120 bash -c 'until docker exec taiga-i05-ldap ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapLab05! > /dev/null 2>&1; do sleep 5; done'
+
+      - name: Wait for LDAP seed to complete
+        run: timeout 120 bash -c 'until docker inspect taiga-i05-ldap-seed --format "{{.State.Status}}" 2>/dev/null | grep -q exited; do sleep 5; done'
+
       - name: Wait for Keycloak
-        run: timeout 300 bash -c 'until curl -sf http://localhost:8540/realms/master; do sleep 10; done'
+        run: timeout 300 bash -c 'until curl -sf http://localhost:8540/health/ready | grep -q UP; do sleep 10; done'
+
+      - name: Wait for WireMock
+        run: timeout 90 bash -c 'until curl -sf http://localhost:8761/__admin/health; do sleep 5; done'
 
       - name: Wait for Taiga Back
-        run: timeout 300 bash -c 'until curl -sf http://localhost:8041/api/v1/ | grep -q version; do sleep 15; done'
+        run: timeout 300 bash -c 'until curl -sf http://localhost:8041/api/v1/ > /dev/null 2>&1; do sleep 15; done'
 
       - name: Run Lab 15-05 test script
         run: bash tests/labs/test-lab-15-05.sh --no-cleanup

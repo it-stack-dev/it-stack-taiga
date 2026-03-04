@@ -1,0 +1,79 @@
+# taiga-ldap-seed.ldif — INT-08 Taiga LDAP seed data
+# FreeIPA-style tree: cn=accounts, cn=users/groups inside it
+# Users: taigaadmin, taigauser1, taigauser2 (pw: Lab05Password!)
+# Groups: cn=admins (taigaadmin), cn=taiga-users (taigauser1, taigauser2)
+
+dn: dc=lab,dc=local
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: IT-Stack Lab
+dc: lab
+
+dn: cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: accounts
+
+dn: cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: users
+
+dn: cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: groups
+
+# ── Users ─────────────────────────────────────────────────────────────────────
+
+dn: uid=taigaadmin,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: taigaadmin
+cn: Taiga Admin
+sn: Admin
+givenName: Taiga
+mail: taigaadmin@lab.local
+userPassword: Lab05Password!
+
+dn: uid=taigauser1,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: taigauser1
+cn: Taiga User1
+sn: User1
+givenName: Taiga
+mail: taigauser1@lab.local
+userPassword: Lab05Password!
+
+dn: uid=taigauser2,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: taigauser2
+cn: Taiga User2
+sn: User2
+givenName: Taiga
+mail: taigauser2@lab.local
+userPassword: Lab05Password!
+
+# ── Groups ────────────────────────────────────────────────────────────────────
+
+dn: cn=admins,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: groupOfNames
+cn: admins
+member: uid=taigaadmin,cn=users,cn=accounts,dc=lab,dc=local
+
+dn: cn=taiga-users,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: groupOfNames
+cn: taiga-users
+member: uid=taigauser1,cn=users,cn=accounts,dc=lab,dc=local
+member: uid=taigauser2,cn=users,cn=accounts,dc=lab,dc=local

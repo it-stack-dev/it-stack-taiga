@@ -2,17 +2,19 @@
 # IT-Stack: Taiga — Lab 05: Advanced Integration
 # Module 15 · Phase 4 · Lab 05
 # =============================================================================
-# Services: PostgreSQL · Redis · OpenLDAP · Keycloak · WireMock (Mattermost-mock)
+# Services: PostgreSQL · Redis · OpenLDAP · LDAP-Seed · Keycloak · WireMock
 #           Mailhog · Taiga Backend · Taiga Frontend
 # Ports:    Frontend:8440  Backend:8041  WireMock:8761  KC:8540  LDAP:3885  MH:8740
 # Credentials:
 #   DB:       taiga / TaigaLab05!
 #   Keycloak: admin / Admin05!
-#   LDAP:     cn=admin,dc=lab,dc=local / LdapLab05!
+#   LDAP:     cn=admin,dc=lab,dc=local / LdapLab05!    readonly: ReadOnly05!
+#   LDAP users: taigaadmin/taigauser1/taigauser2  pw: Lab05Password!
 # What's new vs Lab 04:
-#   + WireMock 3.x simulates Mattermost API (webhooks, DMs)
-#   + Taiga back configured with MATTERMOST_URL for project notifications
-#   + Integration tested: Taiga → Mattermost webhook (project events)
+#   + INT-08 Keycloak OIDC SSO for Taiga (taiga-contrib-oidc-auth)
+#   + LDAP seed init container (taiga-i05-ldap-seed) — FreeIPA-style tree
+#   + KC depends on seed exit; OIDC client "taiga" configured in realm
+#   + OIDC_DISCOVERY_URL env var added to Taiga Back for Ansible provisioner
 # =============================================================================
 
 name: it-stack-taiga-lab05
@@ -94,6 +96,26 @@ services:
           memory: 256M
           cpus: "0.25"
 
+  # ── LDAP Seed (init container) ────────────────────────────────────────────
+  taiga-i05-ldap-seed:
+    image: osixia/openldap:1.5.0
+    container_name: taiga-i05-ldap-seed
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 5
+        ldapadd -x -H ldap://taiga-i05-ldap:389 \
+          -D cn=admin,dc=lab,dc=local -w LdapLab05! \
+          -f /seed/taiga-ldap-seed.ldif && echo "LDAP seed complete" || echo "LDAP seed already exists (idempotent)"
+    volumes:
+      - ./taiga-ldap-seed.ldif:/seed/taiga-ldap-seed.ldif:ro
+    depends_on:
+      taiga-i05-ldap:
+        condition: service_healthy
+    networks:
+      - taiga-i05-net
+    restart: "no"
+
   # ── Keycloak ───────────────────────────────────────────────────────────────
   taiga-i05-kc:
     image: quay.io/keycloak/keycloak:24.0.3
@@ -116,6 +138,9 @@ services:
       timeout: 10s
       retries: 20
       start_period: 30s
+    depends_on:
+      taiga-i05-ldap-seed:
+        condition: service_completed_successfully
     networks:
       - taiga-i05-net
     deploy:
@@ -193,6 +218,7 @@ services:
       KEYCLOAK_REALM: it-stack
       KEYCLOAK_CLIENT_ID: taiga
       KEYCLOAK_CLIENT_SECRET: TaigaKCSecret05!
+      OIDC_DISCOVERY_URL: http://taiga-i05-kc:8080/realms/it-stack/.well-known/openid-configuration
       LDAP_SERVER: taiga-i05-ldap
       LDAP_PORT: "389"
       LDAP_BASE_DN: dc=lab,dc=local
