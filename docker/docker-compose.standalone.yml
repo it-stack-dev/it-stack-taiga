@@ -64,7 +64,7 @@ services:
       - taiga-s01-static:/taiga-back/static
       - taiga-s01-media:/taiga-back/media
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -q 'projects\|auth' || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -qE 'projects|auth' || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 8

@@ -87,7 +87,7 @@ services:
       - taiga-l02-static:/taiga-back/static
       - taiga-l02-media:/taiga-back/media
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -q 'projects\\|auth\\|404' || curl -o /dev/null -sw '%{http_code}' http://localhost:8000/api/v1/ | grep -q '^[234]'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/ | grep -qE 'projects\|auth\|404' || curl -o /dev/null -sw '%{http_code}' http://localhost:8000/api/v1/ | grep -q '^[234]'"]
       interval: 30s
       timeout: 15s
       retries: 8
