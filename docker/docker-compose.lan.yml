@@ -107,7 +107,7 @@ services:
     ports:
       - "8410:80"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/ | grep -qi 'taiga\|doctype' || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost/ | grep -qi 'taiga|doctype' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
